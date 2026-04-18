@@ -8,7 +8,7 @@ let topExpensesChartInstance = null;
 
 // Categories for auto-tagging
 const CATEGORY_RULES = [
-    { name: 'Food & Dining', keywords: ['SWIGGY', 'ZOMATO', 'RESTO', 'HOTEL', 'SNACKS', 'GOKHANA', 'KFC', 'MCDONALDS', 'IB BILLPAY'] },
+    { name: 'Food & Dining', keywords: ['SWIGGY', 'ZOMATO', 'RESTO', 'HOTEL', 'SNACKS', 'GOKHANA', 'KFC', 'MCDONALDS'] },
     { name: 'Groceries', keywords: ['MART', 'SUPERMARKET', 'GROCERY', 'RELIANCE FRESH', 'BASKET', 'AMAZON PAY'] },
     { name: 'Utilities', keywords: ['ELECTRICITY', 'BILL', 'RECHARGE', 'AIRTEL', 'JIO', 'BSNL', 'BESCOM'] },
     { name: 'Transport', keywords: ['UBER', 'OLA', 'RAPIDO', 'METRO', 'IRCTC', 'PETROL', 'FUEL', 'HPCL', 'BPCL', 'INDIAN OIL'] },
@@ -213,26 +213,16 @@ function parseDynamicStatement(pages) {
     const transactions = [];
     let bankName = "Detected Bank";
 
-    // 1. Detect Bank Name & Opening Balance
-    const fullText = pages.map(p => p.map(r => r.join(' ')).join('\n')).join('\n');
-    const upperText = fullText.toUpperCase();
-
-    if (upperText.includes('HDFC')) bankName = 'HDFC';
-    else if (upperText.includes('ICICI')) bankName = 'ICICI';
-    else if (upperText.includes('AXIS')) bankName = 'AXIS';
-    else if (upperText.includes('STATE BANK') || upperText.includes('SBI')) bankName = 'SBI';
-    else if (upperText.includes('KOTAK')) bankName = 'KOTAK';
+    // 1. Detect Bank Name
+    const firstPageText = pages[0].slice(0, 20).map(row => row.join(' ')).join(' ').toUpperCase();
+    if (firstPageText.includes('HDFC')) bankName = 'HDFC';
+    else if (firstPageText.includes('ICICI')) bankName = 'ICICI';
+    else if (firstPageText.includes('AXIS')) bankName = 'AXIS';
+    else if (firstPageText.includes('STATE BANK') || firstPageText.includes('SBI')) bankName = 'SBI';
+    else if (firstPageText.includes('KOTAK')) bankName = 'KOTAK';
     else {
-        const bankMatch = upperText.match(/([A-Z\s]{3,20} BANK)/);
+        const bankMatch = firstPageText.match(/([A-Z\s]{3,20} BANK)/);
         if (bankMatch) bankName = bankMatch[0].trim();
-    }
-
-    // Try to find opening balance
-    let prevBalance = null;
-    const obMatch = fullText.match(/(?:OPENING|BROUGHT|B\/F|PREVIOUS)\s+BALANCE[:\s]+([\d,]+\.\d{2})/i);
-    if (obMatch) {
-        prevBalance = parseAmount(obMatch[1]);
-        console.log("Detected Opening Balance:", prevBalance);
     }
 
     // 2. Identify Column Mapping
@@ -243,12 +233,13 @@ function parseDynamicStatement(pages) {
     const keywords = {
         date: ['date', 'txn date', 'transaction date', 'value date'],
         narration: ['narration', 'description', 'particulars', 'transaction details', 'remarks'],
-        debit: ['debit', 'withdrawal', 'withdrawal amt', 'amount (dr)', 'out'],
-        credit: ['credit', 'deposit', 'deposit amt', 'amount (cr)', 'in'],
+        debit: ['debit', 'withdrawal', 'withdrawal amt', 'amount (dr)'],
+        credit: ['credit', 'deposit', 'deposit amt', 'amount (cr)'],
         amount: ['amount', 'txn amount', 'transaction amount'],
         balance: ['balance', 'running balance', 'bal']
     };
 
+    // Scan first 2 pages for header
     for (let p = 0; p < Math.min(pages.length, 2) && !columnMap; p++) {
         for (let r = 0; r < pages[p].length; r++) {
             const row = pages[p][r];
@@ -258,7 +249,7 @@ function parseDynamicStatement(pages) {
             row.forEach((cell, index) => {
                 const cellText = cell.toLowerCase().trim();
                 for (const [key, list] of Object.entries(keywords)) {
-                    if (list.some(k => cellText === k || (cellText.includes(k) && cellText.length < 25))) {
+                    if (list.some(k => cellText === k || (cellText.includes(k) && cellText.length < 20))) {
                         if (tempMap[key] === undefined) {
                             tempMap[key] = index;
                             matches++;
@@ -267,7 +258,8 @@ function parseDynamicStatement(pages) {
                 }
             });
 
-            if (tempMap.date !== undefined && (tempMap.narration !== undefined || tempMap.amount !== undefined || (tempMap.debit !== undefined && tempMap.credit !== undefined)) && matches >= 2) {
+            // Need at least Date and Narration/Amount to be useful
+            if (tempMap.date !== undefined && (tempMap.narration !== undefined || tempMap.amount !== undefined) && matches >= 3) {
                 columnMap = tempMap;
                 headerRowIndex = r;
                 headerPageIndex = p;
@@ -277,13 +269,13 @@ function parseDynamicStatement(pages) {
     }
 
     if (!columnMap) {
-        console.warn("Could not find header row. Pages:", pages.length);
+        console.warn("Could not find header row. Falling back to heuristic parsing.");
         return parseHeuristic(pages, bankName);
     }
 
-    console.log("Detected Mapping for", bankName, ":", columnMap);
-
     // 3. Extract Transactions
+    let prevBalance = null;
+
     for (let p = headerPageIndex; p < pages.length; p++) {
         let startRow = (p === headerPageIndex) ? headerRowIndex + 1 : 0;
         for (let r = startRow; r < pages[p].length; r++) {
@@ -291,11 +283,11 @@ function parseDynamicStatement(pages) {
             if (row.length < 2) continue;
 
             const dateStr = row[columnMap.date];
-            if (!dateStr || !/\d/.test(dateStr) || dateStr.length > 20) {
-                // Continuation of narration?
+            if (!dateStr || !/\d/.test(dateStr)) {
+                // Check if this is a continuation of narration from previous row
                 if (transactions.length > 0 && columnMap.narration !== undefined) {
                     const extraNarration = row[columnMap.narration];
-                    if (extraNarration && extraNarration.length > 3 && !/\d{2}\/\d{2}/.test(extraNarration)) {
+                    if (extraNarration && extraNarration.length > 3) {
                         transactions[transactions.length - 1].narration += " " + extraNarration.trim();
                     }
                 }
@@ -306,46 +298,33 @@ function parseDynamicStatement(pages) {
             if (!date) continue;
 
             const narration = (row[columnMap.narration] || "").trim();
-            const lowerNarration = narration.toLowerCase();
-            
-            // Check for Cr/Dr indicator in the amount string itself
-            const isCrInStr = (s) => s && /CR|\+|DEPOSIT|CREDIT/i.test(s);
-            const isDrInStr = (s) => s && /DR|\-|WITHDRAWAL|DEBIT/i.test(s);
-
             const debit = parseAmount(row[columnMap.debit]);
             const credit = parseAmount(row[columnMap.credit]);
-            const amountStr = row[columnMap.amount];
-            const amount = parseAmount(amountStr);
+            const amount = parseAmount(row[columnMap.amount]);
             const balance = parseAmount(row[columnMap.balance]);
 
             let txnAmount = 0;
             let type = 'DEBIT';
 
-            if (credit > 0 || (amount > 0 && isCrInStr(amountStr))) {
-                txnAmount = credit || amount;
-                type = 'CREDIT';
-            } else if (debit > 0 || (amount > 0 && isDrInStr(amountStr))) {
-                txnAmount = debit || amount;
+            if (debit > 0) {
+                txnAmount = debit;
                 type = 'DEBIT';
+            } else if (credit > 0) {
+                txnAmount = credit;
+                type = 'CREDIT';
             } else if (amount > 0) {
                 txnAmount = amount;
-                // Infer type from balance change if possible
-                if (balance > 0 && prevBalance !== null) {
-                    const diff = balance - prevBalance;
-                    if (Math.abs(diff - amount) < 0.1) type = 'CREDIT';
-                    else if (Math.abs(diff + amount) < 0.1) type = 'DEBIT';
-                    else {
-                        type = (balance > prevBalance) ? 'CREDIT' : 'DEBIT';
-                    }
+                // Infer type from balance if possible
+                if (prevBalance !== null && balance > 0) {
+                    type = (balance > prevBalance) ? 'CREDIT' : 'DEBIT';
                 } else {
-                    // Expanded Income Keywords
-                    const incomeKeywords = ['salary', 'interest', 'refund', 'received', 'upi-received', 'credit', 'deposit', 'dividend', 'cash dep', 'transfer from', 'imdb', 'reversal'];
-                    if (incomeKeywords.some(k => lowerNarration.includes(k))) {
+                    // Heuristic: check keywords
+                    const lowerNarration = narration.toLowerCase();
+                    if (lowerNarration.includes('salary') || lowerNarration.includes('interest') || lowerNarration.includes('refund')) {
                         type = 'CREDIT';
                     }
                 }
             }
-
 
             if (txnAmount > 0) {
                 transactions.push({
@@ -415,32 +394,20 @@ function normalizeDate(dateStr) {
     if (!dateStr) return null;
     // Clean up
     dateStr = dateStr.trim().replace(/\s+/g, ' ');
-    
-    // Handle DD/MM/YY or DD/MM/YYYY or DD.MM.YYYY
+
+    // Handle DD/MM/YY or DD/MM/YYYY
     let match = dateStr.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
     if (match) {
         let d = match[1].padStart(2, '0');
         let m = match[2].padStart(2, '0');
         let y = match[3];
-        
-        // Handle MM/DD if month > 12 (basic US/UK detection)
-        if (parseInt(d) > 12 && parseInt(m) <= 12) {
-            // Probably MM/DD/YY
-            [d, m] = [m, d];
-        }
-        
         if (y.length === 2) y = "20" + y;
-        return `${d}/${m.padStart(2, '0')}/${y.substring(2)}`;
+        return `${d}/${m}/${y.substring(2)}`;
     }
-    
-    // Handle DD-MMM-YYYY or DD MMM YYYY (e.g., 01-Jan-2024, 15 March 2024)
-    const months = { 
-        jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06', 
-        jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
-        january: '01', february: '02', march: '03', april: '04', june: '06',
-        july: '07', august: '08', september: '09', october: '10', november: '11', december: '12'
-    };
-    match = dateStr.match(/(\d{1,2})[\-\s\.]([A-Za-z]{3,9})[\-\s\.](\d{2,4})/);
+
+    // Handle DD-MMM-YYYY (e.g., 01-Jan-2024)
+    const months = { jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06', jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12' };
+    match = dateStr.match(/(\d{1,2})[\-\s]([A-Za-z]{3})[\-\s](\d{2,4})/);
     if (match) {
         let d = match[1].padStart(2, '0');
         let m = months[match[2].toLowerCase()] || '01';
@@ -451,7 +418,6 @@ function normalizeDate(dateStr) {
 
     return null;
 }
-
 
 function parseAmount(amtStr) {
     if (!amtStr) return 0;

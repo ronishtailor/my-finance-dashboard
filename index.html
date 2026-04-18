@@ -1,23 +1,25 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Finance Dashboard</title>
     <link rel="stylesheet" href="style.css">
-    
+
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    
+
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
-    
+
     <!-- PDF.js -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-    
+
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
+
 <body>
     <div class="app-container">
         <!-- Sidebar -->
@@ -27,9 +29,12 @@
                 <span>FinDash</span>
             </div>
             <nav>
-                <a href="#" class="nav-item active" data-target="dashboard-content"><i data-lucide="layout-dashboard"></i> Dashboard</a>
-                <a href="#" class="nav-item" data-target="categories-view"><i data-lucide="pie-chart"></i> Categories</a>
-                <a href="#" class="nav-item" data-target="insights-view"><i data-lucide="trending-down"></i> Insights</a>
+                <a href="#" class="nav-item active" data-target="dashboard-content"><i
+                        data-lucide="layout-dashboard"></i> Dashboard</a>
+                <a href="#" class="nav-item" data-target="categories-view"><i data-lucide="pie-chart"></i>
+                    Categories</a>
+                <a href="#" class="nav-item" data-target="insights-view"><i data-lucide="trending-down"></i>
+                    Insights</a>
                 <a href="#" class="nav-item" data-target="settings-view"><i data-lucide="settings"></i> Settings</a>
             </nav>
         </aside>
@@ -40,7 +45,8 @@
                 <div>
                     <h1>Overview</h1>
                     <p class="subtitle">Analyze your bank statements</p>
-                    <p class="subtitle" id="date-range" style="color: var(--accent); margin-top: 0.5rem; font-weight: 500;"></p>
+                    <p class="subtitle" id="date-range"
+                        style="color: var(--accent); margin-top: 0.5rem; font-weight: 500;"></p>
                 </div>
                 <div class="actions">
                     <select id="bank-selector" class="month-selector hidden">
@@ -68,7 +74,7 @@
                     <i data-lucide="file-text" class="large-icon"></i>
                     <h2>Drop your bank statement here</h2>
                     <p>or click Upload PDF in the top right. We process everything locally.</p>
-                    
+
                     <div class="password-group">
                         <label for="pdf-password">PDF Password (if any)</label>
                         <input type="password" id="pdf-password" placeholder="Enter password to unlock">
@@ -124,16 +130,18 @@
                         </div>
                     </div>
                 </div>
-                
+
                 <div class="chart-container span-1">
                     <h3>Comparison</h3>
                     <canvas id="comparisonChart"></canvas>
                 </div>
-                
+
                 <div class="chart-container span-2">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                    <div
+                        style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
                         <h3 style="margin-bottom: 0;">Top Spends</h3>
-                        <select id="category-filter" class="month-selector" style="margin-right: 0; padding: 0.25rem 0.5rem; font-size: 0.85rem;">
+                        <select id="category-filter" class="month-selector"
+                            style="margin-right: 0; padding: 0.25rem 0.5rem; font-size: 0.85rem;">
                             <option value="ALL">All Categories</option>
                             <!-- Populated by JS -->
                         </select>
@@ -166,7 +174,8 @@
             <div id="categories-view" class="view-section hidden">
                 <div class="chart-container" style="margin-bottom: 1.5rem;">
                     <h3>Comprehensive Category Breakdown</h3>
-                    <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">A detailed look at your expenditures for the selected month.</p>
+                    <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">A detailed look at your expenditures
+                        for the selected month.</p>
                     <div class="table-responsive">
                         <table id="categories-detailed-table">
                             <thead>
@@ -188,7 +197,8 @@
             <div id="insights-view" class="view-section hidden">
                 <div class="chart-container">
                     <h3>Financial Advisor Suggestions</h3>
-                    <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">Automated insights based on standard budgeting rules (like 50/30/20) and your spending habits.</p>
+                    <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">Automated insights based on standard
+                        budgeting rules (like 50/30/20) and your spending habits.</p>
                     <div id="deep-insights-container">
                         <!-- Populated by JS -->
                     </div>
@@ -199,21 +209,23 @@
             <div id="settings-view" class="view-section hidden">
                 <div class="chart-container" style="margin-bottom: 1.5rem;">
                     <h3>Data Management</h3>
-                    <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">All your financial data is stored securely in this browser. You can permanently wipe it here.</p>
+                    <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">All your financial data is stored
+                        securely in this browser. You can permanently wipe it here.</p>
                     <button id="clear-data-btn" class="btn" style="background-color: var(--expense); color: white;">
                         <i data-lucide="trash-2"></i> Clear All Data
                     </button>
                 </div>
-                
+
                 <div class="chart-container">
                     <h3>Auto-Categorization Rules</h3>
-                    <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">Transactions are categorized automatically if they contain these keywords in their description.</p>
+                    <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">Transactions are categorized
+                        automatically if they contain these keywords in their description.</p>
                     <div id="rules-container" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
                         <!-- Populated by JS -->
                     </div>
                 </div>
             </div>
-            
+
         </main>
     </div>
 
@@ -224,4 +236,5 @@
     </script>
     <script src="app.js"></script>
 </body>
+
 </html>
