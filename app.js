@@ -306,20 +306,27 @@ function parseDynamicStatement(pages) {
             if (!date) continue;
 
             const narration = (row[columnMap.narration] || "").trim();
+            const lowerNarration = narration.toLowerCase();
+            
+            // Check for Cr/Dr indicator in the amount string itself
+            const isCrInStr = (s) => s && /CR|\+|DEPOSIT|CREDIT/i.test(s);
+            const isDrInStr = (s) => s && /DR|\-|WITHDRAWAL|DEBIT/i.test(s);
+
             const debit = parseAmount(row[columnMap.debit]);
             const credit = parseAmount(row[columnMap.credit]);
-            const amount = parseAmount(row[columnMap.amount]);
+            const amountStr = row[columnMap.amount];
+            const amount = parseAmount(amountStr);
             const balance = parseAmount(row[columnMap.balance]);
 
             let txnAmount = 0;
             let type = 'DEBIT';
 
-            if (debit > 0) {
-                txnAmount = debit;
-                type = 'DEBIT';
-            } else if (credit > 0) {
-                txnAmount = credit;
+            if (credit > 0 || (amount > 0 && isCrInStr(amountStr))) {
+                txnAmount = credit || amount;
                 type = 'CREDIT';
+            } else if (debit > 0 || (amount > 0 && isDrInStr(amountStr))) {
+                txnAmount = debit || amount;
+                type = 'DEBIT';
             } else if (amount > 0) {
                 txnAmount = amount;
                 // Infer type from balance change if possible
@@ -331,12 +338,14 @@ function parseDynamicStatement(pages) {
                         type = (balance > prevBalance) ? 'CREDIT' : 'DEBIT';
                     }
                 } else {
-                    const lowerNarration = narration.toLowerCase();
-                    if (lowerNarration.includes('salary') || lowerNarration.includes('interest') || lowerNarration.includes('refund') || lowerNarration.includes('received')) {
+                    // Expanded Income Keywords
+                    const incomeKeywords = ['salary', 'interest', 'refund', 'received', 'upi-received', 'credit', 'deposit', 'dividend', 'cash dep', 'transfer from', 'imdb', 'reversal'];
+                    if (incomeKeywords.some(k => lowerNarration.includes(k))) {
                         type = 'CREDIT';
                     }
                 }
             }
+
 
             if (txnAmount > 0) {
                 transactions.push({
