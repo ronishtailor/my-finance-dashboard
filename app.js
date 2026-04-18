@@ -133,19 +133,23 @@ async function handleFiles(files) {
         if (file.type !== 'application/pdf') continue;
 
         try {
-            const pages = await extractStructuredTextFromPDF(file, passwordInput.value);
-            const parsed = parseDynamicStatement(pages);
+            const text = await extractTextFromPDF(file, passwordInput.value);
+            let parsed = [];
+
+            // Auto-detect Bank
+            const lowerText = text.toLowerCase();
+            if (lowerText.includes('icicibank') || lowerText.includes('icici bank')) {
+                parsed = parseICICIStatement(text);
+            } else {
+                parsed = parseHDFCStatement(text);
+            }
 
             if (parsed.length > 0) {
                 // Group by Month
                 let maxMonthStr = "";
                 parsed.forEach(txn => {
-                    // Robust month key extraction (DD/MM/YY or DD/MM/YYYY)
                     const parts = txn.date.split('/');
-                    let year = parts[2];
-                    if (year.length === 2) year = "20" + year;
-                    const monthKey = `${year}-${parts[1]}`;
-
+                    const monthKey = `20${parts[2]}-${parts[1]}`;
                     if (!allMonthsData[monthKey]) allMonthsData[monthKey] = [];
 
                     const exists = allMonthsData[monthKey].some(existing =>
@@ -174,259 +178,100 @@ async function handleFiles(files) {
         updateMonthSelector();
         renderDashboard();
     } else {
-        alert('No valid transactions found in the uploaded PDFs. Please ensure it is a standard bank statement.');
+        alert('No valid transactions found in the uploaded PDFs.');
     }
 
     loadingOverlay.classList.add('hidden');
 }
 
-async function extractStructuredTextFromPDF(file, password) {
+async function extractTextFromPDF(file, password) {
     const arrayBuffer = await file.arrayBuffer();
     const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer, password: password });
     const pdf = await loadingTask.promise;
 
-    let pages = [];
+    let fullText = '';
     for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
-
-        // Group by Y coordinate (rounding to handle slight variations)
-        const rows = {};
-        textContent.items.forEach(item => {
-            const y = Math.round(item.transform[5]);
-            if (!rows[y]) rows[y] = [];
-            rows[y].push({ x: item.transform[4], text: item.str });
-        });
-
-        // Sort rows by Y descending (PDF coordinates: bottom to top)
-        const sortedY = Object.keys(rows).sort((a, b) => b - a);
-        const pageRows = sortedY.map(y => {
-            // Sort items in row by X ascending
-            return rows[y].sort((a, b) => a.x - b.x).map(item => item.text);
-        });
-        pages.push(pageRows);
+        const pageText = textContent.items.map(item => item.str).join(' ');
+        fullText += pageText + '\n';
     }
-    return pages;
+    return fullText;
 }
 
-function parseDynamicStatement(pages) {
-    const transactions = [];
-    let bankName = "Detected Bank";
-
-    // 1. Detect Bank Name
-    const firstPageText = pages[0].slice(0, 20).map(row => row.join(' ')).join(' ').toUpperCase();
-    if (firstPageText.includes('HDFC')) bankName = 'HDFC';
-    else if (firstPageText.includes('ICICI')) bankName = 'ICICI';
-    else if (firstPageText.includes('AXIS')) bankName = 'AXIS';
-    else if (firstPageText.includes('STATE BANK') || firstPageText.includes('SBI')) bankName = 'SBI';
-    else if (firstPageText.includes('KOTAK')) bankName = 'KOTAK';
-    else {
-        const bankMatch = firstPageText.match(/([A-Z\s]{3,20} BANK)/);
-        if (bankMatch) bankName = bankMatch[0].trim();
-    }
-
-    // 2. Identify Column Mapping
-    let columnMap = null;
-    let headerRowIndex = -1;
-    let headerPageIndex = -1;
-
-    const keywords = {
-        date: ['date', 'txn date', 'transaction date', 'value date'],
-        narration: ['narration', 'description', 'particulars', 'transaction details', 'remarks'],
-        debit: ['debit', 'withdrawal', 'withdrawal amt', 'amount (dr)'],
-        credit: ['credit', 'deposit', 'deposit amt', 'amount (cr)'],
-        amount: ['amount', 'txn amount', 'transaction amount'],
-        balance: ['balance', 'running balance', 'bal']
-    };
-
-    // Scan first 2 pages for header
-    for (let p = 0; p < Math.min(pages.length, 2) && !columnMap; p++) {
-        for (let r = 0; r < pages[p].length; r++) {
-            const row = pages[p][r];
-            const tempMap = {};
-            let matches = 0;
-
-            row.forEach((cell, index) => {
-                const cellText = cell.toLowerCase().trim();
-                for (const [key, list] of Object.entries(keywords)) {
-                    if (list.some(k => cellText === k || (cellText.includes(k) && cellText.length < 20))) {
-                        if (tempMap[key] === undefined) {
-                            tempMap[key] = index;
-                            matches++;
-                        }
-                    }
-                }
-            });
-
-            // Need at least Date and Narration/Amount to be useful
-            if (tempMap.date !== undefined && (tempMap.narration !== undefined || tempMap.amount !== undefined) && matches >= 3) {
-                columnMap = tempMap;
-                headerRowIndex = r;
-                headerPageIndex = p;
-                break;
-            }
-        }
-    }
-
-    if (!columnMap) {
-        console.warn("Could not find header row. Falling back to heuristic parsing.");
-        return parseHeuristic(pages, bankName);
-    }
-
-    // 3. Extract Transactions
+function parseHDFCStatement(text) {
+    const parsed = [];
+    const regex = /(\d{2}\/\d{2}\/\d{2})\s+([\s\S]*?)\s+(\d{2}\/\d{2}\/\d{2})\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})/g;
+    let match;
     let prevBalance = null;
 
-    for (let p = headerPageIndex; p < pages.length; p++) {
-        let startRow = (p === headerPageIndex) ? headerRowIndex + 1 : 0;
-        for (let r = startRow; r < pages[p].length; r++) {
-            const row = pages[p][r];
-            if (row.length < 2) continue;
+    while ((match = regex.exec(text)) !== null) {
+        const date = match[1];
+        const narration = match[2].replace(/\s+/g, ' ').trim();
+        const valueDate = match[3];
+        const amount = parseFloat(match[4].replace(/,/g, ''));
+        const balance = parseFloat(match[5].replace(/,/g, ''));
 
-            const dateStr = row[columnMap.date];
-            if (!dateStr || !/\d/.test(dateStr)) {
-                // Check if this is a continuation of narration from previous row
-                if (transactions.length > 0 && columnMap.narration !== undefined) {
-                    const extraNarration = row[columnMap.narration];
-                    if (extraNarration && extraNarration.length > 3) {
-                        transactions[transactions.length - 1].narration += " " + extraNarration.trim();
-                    }
-                }
-                continue;
-            }
-
-            const date = normalizeDate(dateStr);
-            if (!date) continue;
-
-            const narration = (row[columnMap.narration] || "").trim();
-            const debit = parseAmount(row[columnMap.debit]);
-            const credit = parseAmount(row[columnMap.credit]);
-            const amount = parseAmount(row[columnMap.amount]);
-            const balance = parseAmount(row[columnMap.balance]);
-
-            let txnAmount = 0;
-            let type = 'DEBIT';
-
-            if (debit > 0) {
-                txnAmount = debit;
-                type = 'DEBIT';
-            } else if (credit > 0) {
-                txnAmount = credit;
-                type = 'CREDIT';
-            } else if (amount > 0) {
-                txnAmount = amount;
-                // Infer type from balance if possible
-                if (prevBalance !== null && balance > 0) {
-                    type = (balance > prevBalance) ? 'CREDIT' : 'DEBIT';
-                } else {
-                    // Heuristic: check keywords
-                    const lowerNarration = narration.toLowerCase();
-                    if (lowerNarration.includes('salary') || lowerNarration.includes('interest') || lowerNarration.includes('refund')) {
-                        type = 'CREDIT';
-                    }
-                }
-            }
-
-            if (txnAmount > 0) {
-                transactions.push({
-                    date,
-                    narration: narration.substring(0, 200),
-                    amount: txnAmount,
-                    balance: balance || 0,
-                    type,
-                    category: categorize(narration),
-                    bank: bankName
-                });
-                if (balance > 0) prevBalance = balance;
+        let isDeposit = false;
+        if (prevBalance !== null) {
+            if (balance > prevBalance) isDeposit = true;
+        } else {
+            const lowerNarration = narration.toLowerCase();
+            if (lowerNarration.includes('salary') || lowerNarration.includes('received') || lowerNarration.includes('neft-') || lowerNarration.includes('imps-')) {
+                isDeposit = true;
             }
         }
-    }
 
-    return transactions;
-}
-
-function parseHeuristic(pages, bankName) {
-    const transactions = [];
-    const dateRegex = /(\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4})|(\d{1,2}\s+[A-Z]{3}\s+\d{2,4})/i;
-
-    pages.forEach(page => {
-        page.forEach(row => {
-            const rowText = row.join(' ');
-            const dateMatch = rowText.match(dateRegex);
-            if (!dateMatch) return;
-
-            const date = normalizeDate(dateMatch[0]);
-            if (!date) return;
-
-            // Find numeric values in the row
-            const numbers = row
-                .map(cell => parseAmount(cell))
-                .filter(n => n > 0);
-
-            if (numbers.length >= 2) {
-                // Assume last number is balance, second to last is amount
-                const balance = numbers[numbers.length - 1];
-                const amount = numbers[numbers.length - 2];
-
-                // Try to find narration (longest string that isn't a date or number)
-                let narration = "";
-                row.forEach(cell => {
-                    if (cell.length > narration.length && !dateRegex.test(cell) && isNaN(parseAmount(cell))) {
-                        narration = cell;
-                    }
-                });
-
-                transactions.push({
-                    date,
-                    narration: narration.trim() || "Transaction",
-                    amount: amount,
-                    balance: balance,
-                    type: 'DEBIT', // Default, difficult to infer without header
-                    category: categorize(narration),
-                    bank: bankName
-                });
-            }
+        parsed.push({
+            date, narration, valueDate, amount, balance,
+            type: isDeposit ? 'CREDIT' : 'DEBIT',
+            category: categorize(narration),
+            bank: 'HDFC'
         });
-    });
-    return transactions;
-}
-
-function normalizeDate(dateStr) {
-    if (!dateStr) return null;
-    // Clean up
-    dateStr = dateStr.trim().replace(/\s+/g, ' ');
-
-    // Handle DD/MM/YY or DD/MM/YYYY
-    let match = dateStr.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
-    if (match) {
-        let d = match[1].padStart(2, '0');
-        let m = match[2].padStart(2, '0');
-        let y = match[3];
-        if (y.length === 2) y = "20" + y;
-        return `${d}/${m}/${y.substring(2)}`;
+        prevBalance = balance;
     }
+    return parsed;
+}
 
-    // Handle DD-MMM-YYYY (e.g., 01-Jan-2024)
-    const months = { jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06', jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12' };
-    match = dateStr.match(/(\d{1,2})[\-\s]([A-Za-z]{3})[\-\s](\d{2,4})/);
-    if (match) {
-        let d = match[1].padStart(2, '0');
-        let m = months[match[2].toLowerCase()] || '01';
-        let y = match[3];
-        if (y.length === 2) y = "20" + y;
-        return `${d}/${m}/${y.substring(2)}`;
+function parseICICIStatement(text) {
+    const parsed = [];
+    const regex = /(\d{2}-\d{2}-\d{4})\s+([\s\S]*?)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})/g;
+
+    // Try to find the B/F (Brought Forward) balance to determine first transaction type
+    const bfMatch = text.match(/B\/?F\s*([\d,]+\.\d{2})/i);
+    let prevBalance = bfMatch ? parseFloat(bfMatch[1].replace(/,/g, '')) : null;
+    let match;
+
+    while ((match = regex.exec(text)) !== null) {
+        let dateStr = match[1]; // DD-MM-YYYY
+        const parts = dateStr.split('-');
+        const date = `${parts[0]}/${parts[1]}/${parts[2].substring(2)}`; // DD/MM/YY
+
+        const narration = match[2].replace(/\s+/g, ' ').trim();
+        const valueDate = date;
+        const amount = parseFloat(match[3].replace(/,/g, ''));
+        const balance = parseFloat(match[4].replace(/,/g, ''));
+
+        let isDeposit = false;
+        if (prevBalance !== null) {
+            if (balance > prevBalance) isDeposit = true;
+        } else {
+            const lowerNarration = narration.toLowerCase();
+            if (lowerNarration.includes('salary') || lowerNarration.includes('received') || lowerNarration.includes('neft-') || lowerNarration.includes('imps-')) {
+                isDeposit = true;
+            }
+        }
+
+        parsed.push({
+            date, narration, valueDate, amount, balance,
+            type: isDeposit ? 'CREDIT' : 'DEBIT',
+            category: categorize(narration),
+            bank: 'ICICI'
+        });
+        prevBalance = balance;
     }
-
-    return null;
+    return parsed;
 }
-
-function parseAmount(amtStr) {
-    if (!amtStr) return 0;
-    // Remove currency symbols and commas, handle (Dr)/(Cr)
-    const cleaned = amtStr.replace(/[^\d\.\-]/g, '');
-    const val = parseFloat(cleaned);
-    return isNaN(val) ? 0 : Math.abs(val);
-}
-
 
 function updateMonthSelector() {
     monthSelector.innerHTML = '';
